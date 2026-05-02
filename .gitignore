@@ -1,8 +1,29 @@
-__pycache__/
-*.pyc
-.venv/
-.env
-*.rdb
+# Java / Maven
+target/
+*.class
+*.jar
+*.war
+.mvn/
+mvnw
+mvnw.cmd
+
+# IDE
+.idea/
+*.iml
+.project
+.classpath
+.settings/
+.vscode/
+
+# OS
 .DS_Store
+
+# Environment
+.env
+
+# Redis
+*.rdb
+
+# Node
 node_modules/
 build/
