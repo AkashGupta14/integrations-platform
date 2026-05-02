@@ -1,144 +1,145 @@
 # Integrations Platform
 
-A full-stack integrations platform built with **Spring Boot**, **React**, and **Redis** that connects to third-party services via OAuth 2.0 and loads structured data from their APIs.
+A production-grade OAuth integration framework built with **Java 17 + Spring Boot 3.2**, **React**, and **Redis**. Connects to four third-party providers, loads structured data through their APIs, and protects outbound calls with **Resilience4j circuit breakers and retry**.
 
 ## Supported Integrations
 
-| Integration | OAuth | Data Loading | Objects |
-|-------------|-------|--------------|---------|
-| **Airtable** | PKCE flow | Bases, Tables | Hierarchical (Table -> Base) |
-| **Notion** | Authorization code | Pages, Databases | Workspace tree |
-| **HubSpot** | Authorization code | Contacts, Companies, Deals | CRM objects |
+| Integration | Auth Flow | Objects Loaded | Notes |
+|-------------|-----------|----------------|-------|
+| **Airtable** | OAuth 2.0 + PKCE | Bases, Tables | Hierarchical parent/child |
+| **Notion** | OAuth 2.0 | Pages, Databases | Recursive property search |
+| **HubSpot** | OAuth 2.0 | Contacts, Companies, Deals | CRM v3 with cursor pagination |
+| **Stripe** | OAuth Connect | Customers, PaymentIntents, Charges | `has_more` pagination |
+
+## Production Patterns
+
+- **Circuit breaker** (Resilience4j) on every outbound data-loading call. If a provider API starts failing (>50% failure rate over a 10-call sliding window), the breaker opens for 30s and returns an empty list instead of cascading failures into the caller.
+- **Retry with exponential backoff** (3 attempts, 500ms base, 2x multiplier) on the same calls, so transient 5xx errors from providers don't surface as user-visible failures.
+- **CSRF state validation** on all OAuth callbacks. State tokens are generated with `SecureRandom`, stored in Redis with a 600s TTL, and verified on the return trip before any token exchange.
+- **Ephemeral credential storage** -- OAuth tokens are written to Redis with a short TTL and deleted immediately after the frontend reads them. They never hit disk or a persistent database.
+- **21 unit tests** across controllers (`@WebMvcTest`), services (Mockito), and models. Coverage includes happy paths, error paths, and edge cases (e.g., name fallback when HubSpot contact has no first/last name).
 
 ## Architecture
 
 ```
 +--------------+      +----------------+      +-------+
 |  React SPA   |----->| Spring Boot    |----->| Redis |
-|  (MUI+Axios) |      |  (OAuth +      |      |(state |
-|  :3000       |<-----|   CRM fetch)   |      |+creds)|
+|  (MUI+Axios) |      |  REST API      |      |(state |
+|  :3000       |<-----|  + Resilience4j |      |+creds)|
 +--------------+      +----------------+      +-------+
                             |
-                     +------+------+
-                     v             v
-              Third-party    Third-party
-              OAuth servers  Data APIs
+                  +---------+---------+
+                  v         v         v
+              Airtable  HubSpot   Stripe
+              Notion    CRM v3    Connect
 ```
-
-- **Frontend**: React + Material UI -- renders an integration selector, drives the OAuth popup, and displays loaded data.
-- **Backend**: Java 17 + Spring Boot 3.2 -- handles OAuth handshakes, stores ephemeral state/credentials in Redis, and fetches data from provider APIs.
-- **Redis**: Used as a short-lived key-value store for CSRF `state` tokens and OAuth credentials during the popup flow.
 
 ## Prerequisites
 
 - Java 17+
-- Maven 3.8+
+- Maven 3.8+ (or use the included `mvnw` wrapper)
 - Node.js 16+
 - Redis server
 
-## Setup
+## Quick Start
 
-### 1. Register a HubSpot App
+```bash
+# Terminal 1 -- Redis
+redis-server
 
-1. Create a free developer account at https://developers.hubspot.com.
-2. Create a new app -> **Auth** tab -> set redirect URL to:
-   ```
-   http://localhost:8000/integrations/hubspot/oauth2callback
-   ```
-3. Add scopes: `crm.objects.contacts.read`, `crm.objects.companies.read`, `crm.objects.deals.read`, `oauth`.
-4. Copy the **Client ID** and **Client Secret**.
+# Terminal 2 -- Backend
+cd backend
+./mvnw spring-boot:run          # starts on :8000
 
-### 2. Configure Environment
+# Terminal 3 -- Frontend
+cd frontend
+npm install && npm start         # opens :3000
+```
+
+## Configuration
+
+Copy `.env.example` to `.env` and fill in your OAuth credentials:
 
 ```bash
 cp .env.example .env
-# Fill in your Client ID and Client Secret values
 ```
 
-Or export directly:
+Or export environment variables directly:
 
 ```bash
-export HUBSPOT_CLIENT_ID=your_client_id
-export HUBSPOT_CLIENT_SECRET=your_client_secret
+export HUBSPOT_CLIENT_ID=...
+export HUBSPOT_CLIENT_SECRET=...
+export STRIPE_CLIENT_ID=...        # Stripe Connect platform client ID (ca_...)
+export STRIPE_API_KEY=...          # Stripe secret key (sk_...)
 ```
 
-### 3. Start Redis
+### Registering Provider Apps
 
-```bash
-redis-server
-```
+| Provider | Console | Redirect URI |
+|----------|---------|-------------|
+| HubSpot | https://developers.hubspot.com | `http://localhost:8000/integrations/hubspot/oauth2callback` |
+| Stripe | https://dashboard.stripe.com/settings/connect | `http://localhost:8000/integrations/stripe/oauth2callback` |
+| Airtable | https://airtable.com/create/tokens | `http://localhost:8000/integrations/airtable/oauth2callback` |
+| Notion | https://www.notion.so/my-integrations | `http://localhost:8000/integrations/notion/oauth2callback` |
 
-### 4. Start the Backend
+## Running Tests
 
 ```bash
 cd backend
-./mvnw spring-boot:run
-# or if you have Maven installed globally:
-mvn spring-boot:run
+./mvnw test
 ```
 
-The API runs on http://localhost:8000.
-
-### 5. Start the Frontend
-
-```bash
-cd frontend
-npm install
-npm start
+```
+Tests run: 21, Failures: 0, Errors: 0, Skipped: 0
+BUILD SUCCESS
 ```
 
-The app opens at http://localhost:3000.
-
-## Usage
-
-1. Open http://localhost:3000.
-2. Select an integration (e.g. **HubSpot**) from the dropdown.
-3. Click **Connect to HubSpot** -- a popup opens for OAuth consent.
-4. Approve access -- popup closes, button turns green.
-5. Click **Load Data** -- CRM objects are fetched and displayed.
+Test breakdown:
+- **Controller tests** (9): `@WebMvcTest` with `@MockBean` services. Verify routing, parameter binding, response content types (JSON vs HTML for callbacks), and error handling.
+- **Service tests** (9): Mockito-based. Verify OAuth state management, Redis lifecycle (store/read/delete), API response parsing, and edge cases (blank names, missing fields).
+- **Model tests** (3): Builder defaults, field mapping, equality contract.
 
 ## Project Structure
 
 ```
 backend/
-  pom.xml                                              # Maven build config
+  pom.xml
   src/main/java/com/integrations/
-    IntegrationsApplication.java                       # Spring Boot entry point
+    IntegrationsApplication.java
     config/
-      WebConfig.java                                   # CORS + RestTemplate bean
+      WebConfig.java                    # CORS + RestTemplate bean
     model/
-      IntegrationItem.java                             # Data model (Lombok)
+      IntegrationItem.java              # @Data @Builder (Lombok)
     controller/
-      RootController.java                              # Health check (GET /)
-      AirtableController.java                          # Airtable REST endpoints
-      NotionController.java                            # Notion REST endpoints
-      HubSpotController.java                           # HubSpot REST endpoints
+      RootController.java               # GET / health check
+      AirtableController.java
+      NotionController.java
+      HubSpotController.java
+      StripeController.java
     service/
-      RedisService.java                                # Redis get/set/delete wrapper
-      AirtableService.java                             # Airtable OAuth + data loading
-      NotionService.java                               # Notion OAuth + data loading
-      HubSpotService.java                              # HubSpot OAuth + CRM data loading
+      RedisService.java                 # Thin Redis wrapper
+      AirtableService.java              # PKCE OAuth + bases/tables
+      NotionService.java                # OAuth + recursive search
+      HubSpotService.java               # OAuth + CRM v3 (3 object types)
+      StripeService.java                # Connect OAuth + charges/customers
   src/main/resources/
-    application.properties                             # Server, Redis, OAuth config
+    application.properties              # Port, Redis, OAuth, Resilience4j
+  src/test/java/com/integrations/
+    controller/                         # @WebMvcTest tests
+    service/                            # Mockito unit tests
+    model/                              # Builder + equality tests
 frontend/
   src/
-    App.js                                             # Root component
-    integration-form.js                                # Integration selector + OAuth trigger
-    data-form.js                                       # Load Data button + display
+    App.js
+    integration-form.js                 # Dropdown + dynamic component
+    data-form.js                        # Load Data + display
     integrations/
-      airtable.js                                      # Airtable OAuth component
-      notion.js                                        # Notion OAuth component
-      hubspot.js                                       # HubSpot OAuth component
-```
-
-## HubSpot Implementation Details
-
-The HubSpot integration follows the standard OAuth 2.0 authorization-code grant:
-
-1. **Authorization**: Generates a CSRF `state` token, stores it in Redis, and redirects the user to HubSpot's consent page.
-2. **Callback**: Validates the `state` parameter, exchanges the authorization code for tokens via HubSpot's token endpoint (`application/x-www-form-urlencoded`), and stores credentials in Redis.
-3. **Data Loading**: Fetches **Contacts**, **Companies**, and **Deals** from the HubSpot CRM v3 API with cursor-based pagination. Each object is mapped to an `IntegrationItem` with `id`, `type`, `name`, `creation_time`, `last_modified_time`, and `url`.
+      airtable.js
+      notion.js
+      hubspot.js
+      stripe.js
 
 ## License
 
 MIT
+```
