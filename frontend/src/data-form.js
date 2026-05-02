@@ -10,6 +10,7 @@ const endpointMapping = {
     'Notion': 'notion',
     'Airtable': 'airtable',
     'HubSpot': 'hubspot',
+    'Stripe': 'stripe',
 };
 
 export const DataForm = ({ integrationType, credentials }) => {
