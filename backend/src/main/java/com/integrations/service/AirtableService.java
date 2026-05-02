@@ -12,6 +12,9 @@ import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
+import io.github.resilience4j.retry.annotation.Retry;
+
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -137,6 +140,8 @@ public class AirtableService {
         return objectMapper.readValue(credentials, Object.class);
     }
 
+    @CircuitBreaker(name = "airtable", fallbackMethod = "getItemsFallback")
+    @Retry(name = "airtable")
     @SuppressWarnings("unchecked")
     public List<IntegrationItem> getItems(String credentials) throws Exception {
         Map<String, Object> creds = objectMapper.readValue(credentials, new TypeReference<>() {});
@@ -221,6 +226,12 @@ public class AirtableService {
                 .parentId(parentId != null ? parentId + "_Base" : null)
                 .parentPathOrName(parentName)
                 .build();
+    }
+
+    @SuppressWarnings("unused")
+    private List<IntegrationItem> getItemsFallback(String credentials, Exception e) {
+        System.err.println("Circuit breaker open for Airtable: " + e.getMessage());
+        return Collections.emptyList();
     }
 
     private String generateSecureToken() {

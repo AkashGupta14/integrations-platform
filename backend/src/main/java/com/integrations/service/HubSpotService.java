@@ -12,6 +12,9 @@ import org.springframework.web.client.RestTemplate;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.util.UriComponentsBuilder;
 
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
+import io.github.resilience4j.retry.annotation.Retry;
+
 import java.security.SecureRandom;
 import java.util.*;
 
@@ -105,6 +108,8 @@ public class HubSpotService {
         return objectMapper.readValue(credentials, Object.class);
     }
 
+    @CircuitBreaker(name = "hubspot", fallbackMethod = "getItemsFallback")
+    @Retry(name = "hubspot")
     @SuppressWarnings("unchecked")
     public List<IntegrationItem> getItems(String credentials) throws Exception {
         Map<String, Object> creds = objectMapper.readValue(credentials, new TypeReference<>() {});
@@ -221,6 +226,12 @@ public class HubSpotService {
                 .parentId(parentId)
                 .parentPathOrName(parentName)
                 .build();
+    }
+
+    @SuppressWarnings("unused")
+    private List<IntegrationItem> getItemsFallback(String credentials, Exception e) {
+        System.err.println("Circuit breaker open for HubSpot: " + e.getMessage());
+        return Collections.emptyList();
     }
 
     private String trimOrEmpty(String s) {

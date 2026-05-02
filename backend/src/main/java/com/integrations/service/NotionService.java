@@ -10,6 +10,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
+import io.github.resilience4j.retry.annotation.Retry;
+
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.*;
@@ -110,6 +113,8 @@ public class NotionService {
         return objectMapper.readValue(credentials, Object.class);
     }
 
+    @CircuitBreaker(name = "notion", fallbackMethod = "getItemsFallback")
+    @Retry(name = "notion")
     @SuppressWarnings("unchecked")
     public List<IntegrationItem> getItems(String credentials) throws Exception {
         Map<String, Object> creds = objectMapper.readValue(credentials, new TypeReference<>() {});
@@ -193,6 +198,12 @@ public class NotionService {
             }
         }
         return null;
+    }
+
+    @SuppressWarnings("unused")
+    private List<IntegrationItem> getItemsFallback(String credentials, Exception e) {
+        System.err.println("Circuit breaker open for Notion: " + e.getMessage());
+        return Collections.emptyList();
     }
 
     private String generateSecureToken() {
